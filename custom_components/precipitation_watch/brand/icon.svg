@@ -1,10 +1,30 @@
-<svg viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
-  <!-- Rounded-square red field -->
-  <rect x="8" y="8" width="240" height="240" rx="36" ry="36" fill="#da291c" />
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+  <!-- Deep-navy squircle field -->
+  <rect x="8" y="8" width="240" height="240" rx="52" ry="52" fill="#132A43" />
 
-  <!-- White cross, flag-style proportions (not the official coat-of-arms
-       shield form) -- arm width 6/32 and length 20/32 of the field,
-       centered, not touching the edges. -->
-  <rect x="98" y="53" width="60" height="150" fill="#ffffff" />
-  <rect x="53" y="98" width="150" height="60" fill="#ffffff" />
+  <!-- Radar: faint scan wedge + three concentric rings -->
+  <path d="M128 128 L128 28 A100 100 0 0 1 228 128 Z" fill="#4FD1C5" opacity="0.14" />
+  <circle cx="128" cy="128" r="100" fill="none" stroke="#4FD1C5" stroke-width="3" opacity="0.25" />
+  <circle cx="128" cy="128" r="72" fill="none" stroke="#4FD1C5" stroke-width="3" opacity="0.35" />
+  <circle cx="128" cy="128" r="44" fill="none" stroke="#4FD1C5" stroke-width="3" opacity="0.5" />
+
+  <!-- Cloud: darker undertone offset below the lighter cloud for flat-shaded depth -->
+  <circle cx="112" cy="116" r="16" fill="#B9C6D1" />
+  <circle cx="136" cy="108" r="20" fill="#B9C6D1" />
+  <circle cx="158" cy="118" r="13" fill="#B9C6D1" />
+  <rect x="100" y="116" width="68" height="18" rx="9" fill="#B9C6D1" />
+  <circle cx="112" cy="112" r="16" fill="#EDF1F4" />
+  <circle cx="136" cy="104" r="20" fill="#EDF1F4" />
+  <circle cx="158" cy="114" r="13" fill="#EDF1F4" />
+  <rect x="100" y="112" width="68" height="18" rx="9" fill="#EDF1F4" />
+
+  <!-- Raindrops -->
+  <path d="M122 137 L132 150 A10 10 0 0 1 112 150 Z" fill="#38BDF8" />
+  <path d="M148 141.7 L159 156 A11 11 0 0 1 137 156 Z" fill="#38BDF8" />
+
+  <!-- Swiss-cross badge, lifted off the background with a darker rim -->
+  <circle cx="204" cy="204" r="33" fill="#0E2036" />
+  <circle cx="204" cy="204" r="28" fill="#DA291C" />
+  <rect x="198" y="186" width="11" height="36" fill="#ffffff" />
+  <rect x="186" y="198" width="36" height="11" fill="#ffffff" />
 </svg>
