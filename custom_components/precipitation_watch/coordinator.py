@@ -62,6 +62,7 @@ class PrecipitationCoordinator(DataUpdateCoordinator[ForecastResult]):
         self._mode: str = entry.data[CONF_MODE]
         self._tracked_entity_id: str | None = entry.data.get(CONF_TRACKED_ENTITY_ID)
         self._last_fetch_coords: tuple[float, float] | None = None
+        self._last_fetch_time: datetime | None = None
         self._unsub_state_listener = None
 
         interval_min = entry.options.get(CONF_UPDATE_INTERVAL_MIN, DEFAULT_UPDATE_INTERVAL_MIN)
@@ -91,9 +92,15 @@ class PrecipitationCoordinator(DataUpdateCoordinator[ForecastResult]):
     def _handle_tracked_entity_change(self, event: Event[EventStateChangedData]) -> None:
         """React to the tracked entity moving.
 
-        Only requests a refresh if it clears the distance throttle -- the
-        time throttle is handled for free by DataUpdateCoordinator's own
-        update_interval / async_request_refresh debouncing.
+        Requests a refresh only if it clears both the distance throttle and
+        a time floor matching update_interval. The time floor matters
+        because async_request_refresh() does *not* respect update_interval
+        on its own -- only Home Assistant's own ~10s internal refresh
+        debounce would otherwise limit how often this fires, so a point
+        that's continuously moving (e.g. driving) could cross
+        min_distance_meters every few seconds and trigger far more fetches
+        than the periodic baseline. Flooring by update_interval caps
+        movement-triggered fetches at roughly double that baseline instead.
         """
         new_state = event.data["new_state"]
         if new_state is None:
@@ -115,11 +122,23 @@ class PrecipitationCoordinator(DataUpdateCoordinator[ForecastResult]):
                 )
                 return
             _LOGGER.debug(
-                "%s moved %.0fm (>= %.0fm threshold), requesting refresh",
+                "%s moved %.0fm (>= %.0fm threshold)",
                 self._tracked_entity_id,
                 moved,
                 min_distance,
             )
+
+        if self._last_fetch_time is not None:
+            elapsed = datetime.now(timezone.utc) - self._last_fetch_time
+            if elapsed < self.update_interval:
+                _LOGGER.debug(
+                    "%s: only %.0fs since the last fetch (< %.0fs update_interval floor), "
+                    "skipping movement-triggered refresh",
+                    self._tracked_entity_id,
+                    elapsed.total_seconds(),
+                    self.update_interval.total_seconds(),
+                )
+                return
 
         self.hass.async_create_task(self.async_request_refresh())
 
@@ -166,6 +185,7 @@ class PrecipitationCoordinator(DataUpdateCoordinator[ForecastResult]):
             result.max_probability_within(self.entry.options.get("lookahead_hours", 1)),
         )
         self._last_fetch_coords = (lat, lon)
+        self._last_fetch_time = datetime.now(timezone.utc)
         return result
 
 

@@ -9,14 +9,19 @@ live HTTP calls.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
 
 import aiohttp
 import async_timeout
 
-from .const import API_BASE_URL, API_TIMEOUT_SECONDS, FORECAST_HOURS_REQUESTED
+from .const import (
+    API_BASE_URL,
+    API_TIMEOUT_SECONDS,
+    FORECAST_DAYS_REQUESTED,
+    FORECAST_HOURS_REQUESTED,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -32,6 +37,27 @@ class HourlyPoint:
     time: datetime
     precipitation_probability: int | None  # percent, 0-100
     precipitation_mm: float | None
+    # Everything below is for weather.py's forecast entities, not used by
+    # the precipitation sensors/binary_sensor above.
+    temperature_c: float | None = None
+    wind_speed_kmh: float | None = None
+    wind_direction_deg: float | None = None
+    weather_code: int | None = None  # WMO code, see api._parse
+    is_day: bool | None = None
+
+
+@dataclass
+class DailyPoint:
+    """One daily forecast entry, for weather.py's forecast_daily."""
+
+    date: datetime  # midnight UTC of that calendar day
+    weather_code: int | None
+    temperature_max_c: float | None
+    temperature_min_c: float | None
+    precipitation_mm: float | None
+    precipitation_probability_max: int | None
+    wind_speed_max_kmh: float | None
+    wind_direction_dominant_deg: float | None
 
 
 @dataclass
@@ -49,6 +75,17 @@ class ForecastResult:
     current_precipitation_mm: float | None = None
     current_rain_mm: float | None = None
     current_showers_mm: float | None = None
+    # Daily forecast + "right now" weather fields, for weather.py. Unlike
+    # the precipitation fields above, these are never max-merged across a
+    # sampling ring (see combine_max) -- reporting the exact tracked
+    # point's own temperature/wind/condition, not a ring point's, is what
+    # a weather entity for that point should show.
+    daily: list[DailyPoint] = None  # type: ignore[assignment]
+    current_temperature_c: float | None = None
+    current_wind_speed_kmh: float | None = None
+    current_wind_direction_deg: float | None = None
+    current_weather_code: int | None = None
+    current_is_day: bool | None = None
     # Terrain elevation (m) of the grid cell Open-Meteo resolved this point
     # to. Used to filter out sample-ring points that land on a different
     # elevation band (see combine_max) -- in mountainous terrain, "nearby"
@@ -65,6 +102,8 @@ class ForecastResult:
     def __post_init__(self) -> None:
         if self.sample_points is None:
             self.sample_points = []
+        if self.daily is None:
+            self.daily = []
 
     def max_probability_within(self, hours: int) -> int | None:
         """Highest precipitation probability among the next `hours` hourly points."""
@@ -118,7 +157,8 @@ class ForecastResult:
         if not results:
             raise ValueError("combine_max requires at least one result")
 
-        center_elevation = results[0].elevation_m
+        center = results[0]
+        center_elevation = center.elevation_m
         included: list[ForecastResult] = []
         sample_points: list[tuple[float, float, float | None, int | None, bool]] = []
 
@@ -142,8 +182,15 @@ class ForecastResult:
         if not included:
             # Every ring point got filtered out (e.g. very steep terrain) --
             # fall back to the exact point alone rather than returning nothing.
-            included = [results[0]]
+            included = [center]
 
+        # center is always first in `results` (by construction in
+        # async_get_forecast) and always passes its own elevation-diff check
+        # against itself, so it's always first in `included` too, and is
+        # therefore always the first `result` this loop sees for any given
+        # timestamp -- `replace(existing, ...)` below only ever touches the
+        # precipitation fields, so temperature/wind/condition end up as
+        # center's own values, never a ring point's.
         by_time: dict[datetime, HourlyPoint] = {}
         for result in included:
             for point in result.hourly:
@@ -151,8 +198,8 @@ class ForecastResult:
                 if existing is None:
                     by_time[point.time] = point
                 else:
-                    by_time[point.time] = HourlyPoint(
-                        time=point.time,
+                    by_time[point.time] = replace(
+                        existing,
                         precipitation_probability=_max_optional(
                             existing.precipitation_probability, point.precipitation_probability
                         ),
@@ -170,9 +217,15 @@ class ForecastResult:
             longitude=center_longitude,
             fetched_at=max(r.fetched_at for r in results),
             hourly=merged_hourly,
+            daily=center.daily,
             current_precipitation_mm=current_precip,
             current_rain_mm=current_rain,
             current_showers_mm=current_showers,
+            current_temperature_c=center.current_temperature_c,
+            current_wind_speed_kmh=center.current_wind_speed_kmh,
+            current_wind_direction_deg=center.current_wind_direction_deg,
+            current_weather_code=center.current_weather_code,
+            current_is_day=center.current_is_day,
             elevation_m=center_elevation,
             sample_points=sample_points,
         )
@@ -275,10 +328,12 @@ class OpenMeteoClient:
         params = {
             "latitude": ",".join(f"{lat:.6f}" for lat, _ in points),
             "longitude": ",".join(f"{lon:.6f}" for _, lon in points),
-            "hourly": "precipitation_probability,precipitation",
-            "current": "precipitation,rain,showers",
+            "hourly": "precipitation_probability,precipitation,temperature_2m,wind_speed_10m,wind_direction_10m,weather_code,is_day",
+            "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,wind_speed_10m_max,wind_direction_10m_dominant",
+            "current": "precipitation,rain,showers,temperature_2m,wind_speed_10m,wind_direction_10m,weather_code,is_day",
             "timezone": "UTC",
             "forecast_hours": str(FORECAST_HOURS_REQUESTED),
+            "forecast_days": str(FORECAST_DAYS_REQUESTED),
             # best_match will use MeteoSwiss ICON-CH1/CH2 automatically inside
             # Switzerland/the Alps, and fall back sanely for points outside it.
             "models": "best_match",
@@ -317,8 +372,16 @@ class OpenMeteoClient:
         except KeyError as err:
             raise ApiError(f"Unexpected Open-Meteo response shape, missing key: {err}") from err
 
+        temps = hourly_raw.get("temperature_2m", [None] * len(times))
+        wind_speeds = hourly_raw.get("wind_speed_10m", [None] * len(times))
+        wind_dirs = hourly_raw.get("wind_direction_10m", [None] * len(times))
+        codes = hourly_raw.get("weather_code", [None] * len(times))
+        is_days = hourly_raw.get("is_day", [None] * len(times))
+
         points: list[HourlyPoint] = []
-        for t, p, a in zip(times, probs, amounts):
+        for t, p, a, temp, wspd, wdir, code, is_day in zip(
+            times, probs, amounts, temps, wind_speeds, wind_dirs, codes, is_days
+        ):
             try:
                 ts = datetime.fromisoformat(t).replace(tzinfo=timezone.utc)
             except ValueError:
@@ -329,18 +392,62 @@ class OpenMeteoClient:
                     time=ts,
                     precipitation_probability=p,
                     precipitation_mm=a,
+                    temperature_c=temp,
+                    wind_speed_kmh=wspd,
+                    wind_direction_deg=wdir,
+                    weather_code=code,
+                    is_day=bool(is_day) if is_day is not None else None,
+                )
+            )
+
+        daily_raw = payload.get("daily") or {}
+        daily_times = daily_raw.get("time", [])
+        daily_codes = daily_raw.get("weather_code", [None] * len(daily_times))
+        temps_max = daily_raw.get("temperature_2m_max", [None] * len(daily_times))
+        temps_min = daily_raw.get("temperature_2m_min", [None] * len(daily_times))
+        daily_precip = daily_raw.get("precipitation_sum", [None] * len(daily_times))
+        daily_prob = daily_raw.get("precipitation_probability_max", [None] * len(daily_times))
+        daily_wind = daily_raw.get("wind_speed_10m_max", [None] * len(daily_times))
+        daily_wind_dir = daily_raw.get("wind_direction_10m_dominant", [None] * len(daily_times))
+
+        daily_points: list[DailyPoint] = []
+        for d, code, tmax, tmin, precip, prob, wind, wind_dir in zip(
+            daily_times, daily_codes, temps_max, temps_min, daily_precip, daily_prob, daily_wind, daily_wind_dir
+        ):
+            try:
+                day = datetime.fromisoformat(d).replace(tzinfo=timezone.utc)
+            except ValueError:
+                _LOGGER.debug("Skipping unparseable date in Open-Meteo daily response: %s", d)
+                continue
+            daily_points.append(
+                DailyPoint(
+                    date=day,
+                    weather_code=code,
+                    temperature_max_c=tmax,
+                    temperature_min_c=tmin,
+                    precipitation_mm=precip,
+                    precipitation_probability_max=prob,
+                    wind_speed_max_kmh=wind,
+                    wind_direction_dominant_deg=wind_dir,
                 )
             )
 
         current_raw = payload.get("current") or {}
+        current_is_day = current_raw.get("is_day")
 
         return ForecastResult(
             latitude=latitude,
             longitude=longitude,
             fetched_at=datetime.now(timezone.utc),
             hourly=points,
+            daily=daily_points,
             current_precipitation_mm=current_raw.get("precipitation"),
             current_rain_mm=current_raw.get("rain"),
             current_showers_mm=current_raw.get("showers"),
+            current_temperature_c=current_raw.get("temperature_2m"),
+            current_wind_speed_kmh=current_raw.get("wind_speed_10m"),
+            current_wind_direction_deg=current_raw.get("wind_direction_10m"),
+            current_weather_code=current_raw.get("weather_code"),
+            current_is_day=bool(current_is_day) if current_is_day is not None else None,
             elevation_m=payload.get("elevation"),
         )

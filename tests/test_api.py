@@ -67,6 +67,47 @@ def test_current_precipitation_parsed(sample_payload):
     assert result.current_precipitation_mm == 0.0
 
 
+def test_parse_builds_hourly_weather_fields(sample_payload):
+    result = OpenMeteoClient._parse(DEVICE_TRACKER_LATITUDE, DEVICE_TRACKER_LONGITUDE, sample_payload)
+    rainy_hour = result.hourly[3]
+    assert rainy_hour.weather_code == 61
+    assert rainy_hour.temperature_c == pytest.approx(18.3)
+    assert rainy_hour.wind_speed_kmh == 10.0
+    assert rainy_hour.wind_direction_deg == 180.0
+    assert rainy_hour.is_day is True
+
+
+def test_parse_builds_daily_forecast(sample_payload):
+    result = OpenMeteoClient._parse(DEVICE_TRACKER_LATITUDE, DEVICE_TRACKER_LONGITUDE, sample_payload)
+    assert len(result.daily) == 1
+    day = result.daily[0]
+    assert day.weather_code == 1
+    assert day.temperature_max_c == 22.0
+    assert day.temperature_min_c == 14.0
+    assert day.precipitation_probability_max == 10
+
+
+def test_parse_builds_current_weather_fields(sample_payload):
+    result = OpenMeteoClient._parse(DEVICE_TRACKER_LATITUDE, DEVICE_TRACKER_LONGITUDE, sample_payload)
+    assert result.current_temperature_c == 19.5
+    assert result.current_wind_speed_kmh == 12.0
+    assert result.current_wind_direction_deg == 200.0
+    assert result.current_weather_code == 1
+    assert result.current_is_day is True
+
+
+def test_parse_missing_daily_block_defaults_to_empty_list():
+    payload = {
+        "hourly": {
+            "time": ["2026-08-14T19:00"],
+            "precipitation_probability": [0],
+            "precipitation": [0.0],
+        }
+    }
+    result = OpenMeteoClient._parse(0.0, 0.0, payload)
+    assert result.daily == []
+
+
 def test_current_precipitation_missing_block_defaults_to_none():
     """Older cached responses or partial payloads shouldn't crash parsing."""
     payload = {
@@ -125,6 +166,53 @@ def test_combine_max_surfaces_cell_only_one_sample_point_caught():
     assert combined.hourly[0].precipitation_mm == 2.4
     assert combined.current_precipitation_mm == 4.2
     assert len(combined.sample_points) == 2
+
+
+def test_combine_max_keeps_center_weather_but_maxes_precipitation():
+    """Temperature/wind/condition/daily should come from the exact tracked
+    point, never a ring point -- only precipitation gets max-merged."""
+    from custom_components.precipitation_watch.api import DailyPoint, ForecastResult, HourlyPoint
+
+    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    t0 = now
+
+    center = ForecastResult(
+        latitude=46.36, longitude=8.97, fetched_at=now,
+        hourly=[HourlyPoint(
+            time=t0, precipitation_probability=0, precipitation_mm=0.0,
+            temperature_c=12.0, wind_speed_kmh=5.0, wind_direction_deg=90.0, weather_code=1, is_day=True,
+        )],
+        daily=[DailyPoint(
+            date=t0, weather_code=1, temperature_max_c=18.0, temperature_min_c=8.0,
+            precipitation_mm=0.0, precipitation_probability_max=10, wind_speed_max_kmh=12.0,
+            wind_direction_dominant_deg=100.0,
+        )],
+        current_temperature_c=12.5, current_wind_speed_kmh=6.0, current_wind_direction_deg=95.0,
+        current_weather_code=1, current_is_day=True,
+    )
+    east_hotter_and_rainier = ForecastResult(
+        latitude=46.36, longitude=9.00, fetched_at=now,
+        hourly=[HourlyPoint(
+            time=t0, precipitation_probability=85, precipitation_mm=2.4,
+            temperature_c=30.0, wind_speed_kmh=40.0, wind_direction_deg=270.0, weather_code=95, is_day=True,
+        )],
+        current_temperature_c=31.0, current_wind_speed_kmh=41.0, current_wind_direction_deg=275.0,
+        current_weather_code=95, current_is_day=True,
+    )
+
+    combined = ForecastResult.combine_max(46.36, 8.97, [center, east_hotter_and_rainier])
+
+    # Precipitation: max-merged, ring point's rain shows through.
+    assert combined.hourly[0].precipitation_probability == 85
+    assert combined.hourly[0].precipitation_mm == 2.4
+    # Everything else: center's own values, not the ring point's.
+    assert combined.hourly[0].temperature_c == 12.0
+    assert combined.hourly[0].wind_speed_kmh == 5.0
+    assert combined.hourly[0].weather_code == 1
+    assert combined.current_temperature_c == 12.5
+    assert combined.current_wind_speed_kmh == 6.0
+    assert combined.current_weather_code == 1
+    assert combined.daily == center.daily
 
 
 def test_combine_max_requires_at_least_one_result():

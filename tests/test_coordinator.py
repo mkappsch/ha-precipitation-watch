@@ -11,6 +11,7 @@ Split into two tiers:
 """
 from __future__ import annotations
 
+from datetime import timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -47,6 +48,7 @@ from custom_components.precipitation_watch.const import (  # noqa: E402
     CONF_MIN_DISTANCE_M,
     CONF_NAME,
     CONF_TRACKED_ENTITY_ID,
+    CONF_UPDATE_INTERVAL_MIN,
     DEFAULT_MAX_ELEVATION_DIFF_M,
     DEFAULT_SAMPLE_RADIUS_KM,
     DOMAIN,
@@ -139,3 +141,149 @@ async def test_small_movement_below_threshold_does_not_trigger_refresh(hass, ena
 
     # Only the initial fetch should have happened, not a second one from the nudge.
     assert mocked_fetch.await_count == 1
+
+
+async def test_movement_refresh_throttled_by_update_interval_floor(
+    hass, enable_custom_integrations, mock_forecast_result, freezer
+):
+    """A big-enough move should still be throttled if it happens sooner
+    than update_interval after the last fetch -- async_request_refresh()
+    doesn't respect update_interval on its own, so without this floor a
+    continuously-moving point could fetch far more often than intended."""
+    hass.states.async_set(
+        DEVICE_TRACKER_ENTITY_ID,
+        "home",
+        {"latitude": DEVICE_TRACKER_LATITUDE, "longitude": DEVICE_TRACKER_LONGITUDE},
+    )
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_MODE: MODE_TRACKED,
+            CONF_NAME: "Car",
+            CONF_TRACKED_ENTITY_ID: DEVICE_TRACKER_ENTITY_ID,
+        },
+        # Small distance threshold so a small move clears it easily --
+        # the update_interval floor is what's under test here, not distance.
+        options={CONF_MIN_DISTANCE_M: 50, CONF_UPDATE_INTERVAL_MIN: 15},
+    )
+    entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.precipitation_watch.api.OpenMeteoClient.async_get_forecast",
+        AsyncMock(return_value=mock_forecast_result),
+    ) as mocked_fetch:
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+        # Move well past the 50m threshold, immediately (no time elapsed).
+        hass.states.async_set(
+            DEVICE_TRACKER_ENTITY_ID,
+            "home",
+            {"latitude": DEVICE_TRACKER_LATITUDE + 0.01, "longitude": DEVICE_TRACKER_LONGITUDE},
+        )
+        await hass.async_block_till_done()
+
+    # Distance threshold was cleared, but update_interval (15min) hasn't
+    # elapsed yet -- the floor should have blocked the second fetch.
+    assert mocked_fetch.await_count == 1
+
+
+async def test_movement_refresh_allowed_once_update_interval_elapses(
+    hass, enable_custom_integrations, mock_forecast_result, freezer
+):
+    """Once update_interval has actually passed, a qualifying move should
+    trigger a fetch again -- the floor only delays, it doesn't disable."""
+    hass.states.async_set(
+        DEVICE_TRACKER_ENTITY_ID,
+        "home",
+        {"latitude": DEVICE_TRACKER_LATITUDE, "longitude": DEVICE_TRACKER_LONGITUDE},
+    )
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_MODE: MODE_TRACKED,
+            CONF_NAME: "Car",
+            CONF_TRACKED_ENTITY_ID: DEVICE_TRACKER_ENTITY_ID,
+        },
+        options={CONF_MIN_DISTANCE_M: 50, CONF_UPDATE_INTERVAL_MIN: 15},
+    )
+    entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.precipitation_watch.api.OpenMeteoClient.async_get_forecast",
+        AsyncMock(return_value=mock_forecast_result),
+    ) as mocked_fetch:
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+        freezer.tick(timedelta(minutes=16))
+
+        hass.states.async_set(
+            DEVICE_TRACKER_ENTITY_ID,
+            "home",
+            {"latitude": DEVICE_TRACKER_LATITUDE + 0.01, "longitude": DEVICE_TRACKER_LONGITUDE},
+        )
+        await hass.async_block_till_done()
+
+    assert mocked_fetch.await_count == 2
+
+
+async def test_weather_entity_reports_current_conditions_and_forecasts(
+    hass, enable_custom_integrations, mock_forecast_result
+):
+    """The weather platform should come up alongside sensor/binary_sensor and
+    expose current conditions + both forecast types from the same coordinator
+    data -- no separate fetch, no separate throttling."""
+    hass.states.async_set(
+        DEVICE_TRACKER_ENTITY_ID,
+        "home",
+        {"latitude": DEVICE_TRACKER_LATITUDE, "longitude": DEVICE_TRACKER_LONGITUDE},
+    )
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_MODE: MODE_TRACKED,
+            CONF_NAME: "Car",
+            CONF_TRACKED_ENTITY_ID: DEVICE_TRACKER_ENTITY_ID,
+        },
+        options={CONF_MIN_DISTANCE_M: 200},
+    )
+    entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.precipitation_watch.api.OpenMeteoClient.async_get_forecast",
+        AsyncMock(return_value=mock_forecast_result),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    state = hass.states.get("weather.car")
+    assert state is not None
+    assert state.state == "sunny"  # sample_payload's `current` block: weather_code=1, is_day=1
+    assert state.attributes["temperature"] == 19.5
+    assert state.attributes["wind_speed"] == 12.0
+
+    daily_response = await hass.services.async_call(
+        "weather", "get_forecasts", {"entity_id": "weather.car", "type": "daily"},
+        blocking=True, return_response=True,
+    )
+    hourly_response = await hass.services.async_call(
+        "weather", "get_forecasts", {"entity_id": "weather.car", "type": "hourly"},
+        blocking=True, return_response=True,
+    )
+    daily = daily_response["weather.car"]["forecast"]
+    hourly = hourly_response["weather.car"]["forecast"]
+    # The get_forecasts service response uses the display attribute names
+    # (unit-converted), not the entity's internal native_* field names.
+    # sample_payload defaults to hours=24 -- 1 day of daily, 24h hourly --
+    # regardless of the real FORECAST_HOURS_REQUESTED/FORECAST_DAYS_REQUESTED
+    # constants, since this mock bypasses the actual API call entirely.
+    assert len(daily) == 1
+    assert daily[0]["temperature"] == 22.0
+    assert daily[0]["templow"] == 14.0
+    assert len(hourly) == 24
+    assert hourly[3]["condition"] == "rainy"  # sample_payload's rainy_hour_index=3, WMO code 61
+    assert hourly[3]["temperature"] == pytest.approx(18.3)

@@ -33,6 +33,34 @@ ICON-CH1/CH2 models inside Switzerland and the Alps. Data is
 automation use, attribution required (already included in every entity via
 `attribution`). Free tier: 10,000 calls/day, non-commercial use only.
 
+### How this differs from other MeteoSwiss integrations
+
+If you've compared this against [Rudd-O's `homeassistant-meteoswiss`](https://github.com/Rudd-O/homeassistant-meteoswiss)
+or a similar integration and seen different numbers for the same location,
+that's expected — they use a different pipeline end to end, not a bug in
+either:
+
+- **Current conditions**: that integration reads real physical weather
+  station observations (or precipitation-only stations) from MeteoSwiss's
+  own `data.geo.admin.ch`. This integration's `current_precipitation`
+  sensor and the weather entity's current conditions instead come from
+  Open-Meteo's model-based nowcast for your exact coordinates — an
+  estimate, not a station reading. Trade-off either way: a station is
+  real ground truth but may be several km from your actual point; the
+  model is exactly at your coordinates but isn't a measurement.
+- **Forecast**: national weather services almost always apply statistical
+  post-processing/calibration on top of the raw numerical model before
+  publishing their official public forecast. Open-Meteo's `best_match`
+  serves the *raw* MeteoSwiss ICON-CH1/CH2 model output — an input into
+  MeteoSwiss's official product, not identical to it.
+
+Don't be surprised by a few degrees' difference or a differing condition
+word between this and an official-source integration for the same
+location. **This hasn't been validated for real-world accuracy yet** — if
+you track it against actual conditions at your watched points, [issue
+reports](https://github.com/mkappsch/ha-precipitation-watch/issues) on
+systematic bias would be genuinely useful.
+
 ## Installation
 
 ### HACS (recommended)
@@ -194,6 +222,38 @@ logger:
     custom_components.precipitation_watch: debug
 ```
 
+## API usage & rate limits
+
+This integration uses Open-Meteo's free tier (no API key): **10,000
+calls/day, 5,000/hour, 600/minute**. For a normal setup you won't get
+close to these:
+
+- Each watched point fetches once per `update_interval_minutes` (default
+  15min → 96 fetches/day). With the default `sample_radius_km=3` sampling
+  ring, each fetch batches 5 coordinates (center + N/E/S/W) into one HTTP
+  request. Open-Meteo's docs don't say whether a batched request counts as
+  1 call or 5 against the quota — even under the pessimistic assumption
+  (5), that's 480 calls/day per point, under 5% of the daily budget.
+- There's no usage dashboard or rate-limit info for the free/keyless
+  tier — checked directly, Open-Meteo's responses carry no `X-RateLimit-*`
+  headers, so there's nothing to poll for a live "remaining quota." The
+  most reliable way to see real call volume is the debug logging above:
+  every fetch logs a `fetching forecast for (...)` line, so counting
+  those over a day gives you an actual number, movement-triggered extras
+  included.
+- **Tracked mode**: movement-triggered refreshes (when the tracked entity
+  crosses `min_distance_meters`) are floored by `update_interval_minutes`
+  just like the periodic timer, so a continuously-moving point (e.g.
+  driving) can't push the fetch rate past roughly double the periodic
+  baseline. It's still a cheap floor rather than a smart one — see Known
+  limitations for the "wait until actually stopped moving" idea that
+  would avoid fetching mid-transit entirely.
+
+None of this matters much for a handful of watched points at default
+settings; it starts to matter with many watched points, an aggressively
+short `update_interval_minutes`, or several continuously-moving tracked
+points.
+
 ## Migrating from an old `swiss_rain_alert` install
 
 If you have an existing install under the old `swiss_rain_alert` domain
@@ -211,17 +271,23 @@ add this one fresh and re-create your watched points.
   mapping, daily/hourly `Forecast` arrays). For a normal *fixed*-location
   weather card, use HA core's built-in Open-Meteo integration directly —
   no custom component needed for that case.
-- **Not yet exercised against a live call to the real Open-Meteo API.**
-  The client is built from Open-Meteo's documented parameter names
-  (`hourly=precipitation_probability,precipitation`, `models=best_match`)
-  and tested against a hand-built payload matching that documented shape,
-  but if the live API's response shape ever differs from what's assumed
-  here, please [open an issue](https://github.com/mkappsch/ha-precipitation-watch/issues) —
-  `api.py`'s `_parse` is the only place that would need adjusting.
 - **`binary_sensor` availability** doesn't yet distinguish "never fetched"
   vs. "fetch failed" vs. "fetched but no rain" beyond `None`/`False`.
 - **No reconfigure flow** for switching an existing entry between
   fixed/tracked mode — remove and re-add for now.
+- **Movement-triggered refreshes only have a cheap time floor, not a smart
+  one.** They're capped at `update_interval_minutes` (same as the
+  periodic timer, see [API usage & rate limits](#api-usage--rate-limits)),
+  which bounds worst-case API usage, but a continuously-moving point still
+  fetches on that same cadence throughout the whole trip — once per
+  `update_interval_minutes`, for a route that might not need updates at
+  all until it actually arrives somewhere. A "wait until movement has
+  settled" debounce (only fetch once the point has been roughly
+  stationary for a bit, resetting while still moving) would skip
+  in-transit fetches entirely and is a likely next addition.
+- If the live API's response shape ever changes from what's assumed here
+  (verified against a real call as of this writing — see `_parse` in
+  `api.py`), please [open an issue](https://github.com/mkappsch/ha-precipitation-watch/issues).
 
 ## Contributing
 
