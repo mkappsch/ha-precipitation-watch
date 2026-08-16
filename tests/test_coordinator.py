@@ -46,6 +46,8 @@ from custom_components.precipitation_watch.const import (  # noqa: E402
     CONF_MIN_DISTANCE_M,
     CONF_NAME,
     CONF_TRACKED_ENTITY_ID,
+    DEFAULT_MAX_ELEVATION_DIFF_M,
+    DEFAULT_SAMPLE_RADIUS_KM,
     DOMAIN,
     MODE_TRACKED,
 )
@@ -84,7 +86,12 @@ async def test_tracked_mode_reads_coords_from_entity_state(hass, enable_custom_i
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
 
-    mocked_fetch.assert_awaited_once_with(DEVICE_TRACKER_LATITUDE, DEVICE_TRACKER_LONGITUDE)
+    mocked_fetch.assert_awaited_once_with(
+        DEVICE_TRACKER_LATITUDE,
+        DEVICE_TRACKER_LONGITUDE,
+        DEFAULT_SAMPLE_RADIUS_KM,
+        DEFAULT_MAX_ELEVATION_DIFF_M,
+    )
 
     state = hass.states.get("binary_sensor.car_precipitation_expected")
     assert state is not None
