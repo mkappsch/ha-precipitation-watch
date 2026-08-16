@@ -58,7 +58,7 @@ def mock_forecast_result(sample_payload):
     return OpenMeteoClient._parse(DEVICE_TRACKER_LATITUDE, DEVICE_TRACKER_LONGITUDE, sample_payload)
 
 
-async def test_tracked_mode_reads_coords_from_entity_state(hass, mock_forecast_result):
+async def test_tracked_mode_reads_coords_from_entity_state(hass, enable_custom_integrations, mock_forecast_result):
     """Coordinator should pull lat/lon straight from the tracked entity's attributes."""
     hass.states.async_set(
         DEVICE_TRACKER_ENTITY_ID,
@@ -91,7 +91,7 @@ async def test_tracked_mode_reads_coords_from_entity_state(hass, mock_forecast_r
     assert state.state == "on"  # sample_payload has an 85% hour within default lookahead
 
 
-async def test_small_movement_below_threshold_does_not_trigger_refresh(hass, mock_forecast_result):
+async def test_small_movement_below_threshold_does_not_trigger_refresh(hass, enable_custom_integrations, mock_forecast_result):
     """Moving less than min_distance_meters shouldn't cause a re-fetch."""
     hass.states.async_set(
         DEVICE_TRACKER_ENTITY_ID,
