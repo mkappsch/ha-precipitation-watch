@@ -42,6 +42,7 @@ def test_haversine_known_short_distance():
 from pytest_homeassistant_custom_component.common import MockConfigEntry  # noqa: E402
 
 from custom_components.precipitation_watch.const import (  # noqa: E402
+    CONF_LOOKAHEAD_HOURS,
     CONF_MODE,
     CONF_MIN_DISTANCE_M,
     CONF_NAME,
@@ -75,7 +76,11 @@ async def test_tracked_mode_reads_coords_from_entity_state(hass, enable_custom_i
             CONF_NAME: "Car",
             CONF_TRACKED_ENTITY_ID: DEVICE_TRACKER_ENTITY_ID,
         },
-        options={CONF_MIN_DISTANCE_M: 200},
+        # sample_payload's rainy hour is 3h out (see test_api.py's
+        # test_max_probability_within_excludes_out_of_window_rain) -- inside
+        # this window but outside the 1h default, so lookahead is widened
+        # deliberately rather than relying on the default.
+        options={CONF_MIN_DISTANCE_M: 200, CONF_LOOKAHEAD_HOURS: 6},
     )
     entry.add_to_hass(hass)
 
@@ -95,7 +100,7 @@ async def test_tracked_mode_reads_coords_from_entity_state(hass, enable_custom_i
 
     state = hass.states.get("binary_sensor.car_precipitation_expected")
     assert state is not None
-    assert state.state == "on"  # sample_payload has an 85% hour within default lookahead
+    assert state.state == "on"  # sample_payload's 85% hour is within the 6h lookahead set above
 
 
 async def test_small_movement_below_threshold_does_not_trigger_refresh(hass, enable_custom_integrations, mock_forecast_result):
