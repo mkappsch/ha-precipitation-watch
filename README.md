@@ -196,6 +196,14 @@ pytest
   `device_tracker.xyz` fixture coordinates, with the Open-Meteo call mocked
   out (no live network calls in tests).
 
+**Windows note:** Home Assistant core imports the POSIX-only `fcntl` module
+at startup, so the `hass`-fixture tests in `test_coordinator.py` can only run
+on Linux/macOS (or WSL) — natively on Windows even collecting them crashes
+pytest before it gets a chance to skip. Everything else (`test_api.py` plus
+the pure-math tests in `test_coordinator.py`) runs fine on Windows with
+`pytest -p no:homeassistant`. CI (`.github/workflows/test.yml`) runs the full
+suite on `ubuntu-latest`, which is the authoritative pass/fail signal.
+
 ## Migrating from the old `swiss_rain_alert` domain
 
 If you already have this installed under the old name: the domain rename
@@ -209,10 +217,11 @@ now than after anyone else has installed it.
 - [x] `hacs.json` at repo root
 - [x] Single integration under `custom_components/precipitation_watch/`
 - [x] `custom_components/precipitation_watch/brand/icon.png` (256x256, self-hosted brand asset)
-- [ ] Push to a public GitHub repo
+- [x] `manifest.json`'s `codeowners`/`documentation`/`issue_tracker` point at the real repo (`mkappsch/ha-precipitation-watch`)
+- [x] Local git repo initialized, CI workflows added (`.github/workflows/test.yml` runs pytest on 3.12/3.13; `validate.yml` runs `hassfest` + the HACS validation action)
+- [ ] Push to a public GitHub repo at `github.com/mkappsch/ha-precipitation-watch`
 - [ ] Set a repo description + topics (used by HACS for search/display)
 - [ ] Cut a proper GitHub **Release** (not just a tag) matching `manifest.json`'s `version`
-- [ ] Update `manifest.json`'s `codeowners`/`documentation`/`issue_tracker` placeholders to your real GitHub username/repo
 - [ ] Then: HACS → ⋮ → Custom repositories → paste the repo URL
 
 Default HACS store listing (searchable without adding a custom repo URL) is
@@ -241,5 +250,7 @@ actually use or share this integration.
   tightening once you see real failure modes.
 - No reconfigure flow for switching an existing entry between fixed/tracked
   mode — currently you'd remove and re-add.
-- HACS `brands` repo submission and `hassfest` validation intentionally
-  skipped per your request — needed before a real HACS listing.
+- `hassfest` and HACS validation now run in CI (`.github/workflows/validate.yml`)
+  on every push/PR, but the separate `home-assistant/brands` repo submission
+  (needed for the icon to show up in HA's own UI, distinct from the HACS
+  listing itself) hasn't been done yet.

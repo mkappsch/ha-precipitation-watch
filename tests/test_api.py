@@ -5,6 +5,8 @@ since api.py has no HA imports beyond aiohttp typing.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
 from custom_components.precipitation_watch.api import OpenMeteoClient
