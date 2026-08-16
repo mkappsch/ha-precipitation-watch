@@ -1,4 +1,4 @@
-# Swiss Precipitation Watch (MeteoSwiss data via Open-Meteo)
+# Precipitation Watch
 
 > **Not affiliated with, endorsed by, or sponsored by MeteoSwiss, the
 > Federal Office of Meteorology and Climatology, or Open-Meteo.** This is
@@ -33,17 +33,32 @@ ICON-CH1/CH2 models inside Switzerland and the Alps. Data is
 automation use, attribution required (already included in every entity via
 `attribution`). Free tier: 10,000 calls/day, non-commercial use only.
 
-## Setup
+## Installation
 
-1. Copy `custom_components/precipitation_watch/` into your HA `custom_components/` directory.
+### HACS (recommended)
+
+1. Make sure [HACS](https://hacs.xyz) is installed.
+2. HACS → ⋮ (top right) → **Custom repositories**.
+3. Add `https://github.com/mkappsch/ha-precipitation-watch` as type
+   **Integration** (or just search "Precipitation Watch" directly in that
+   dialog — the repository is tagged for HACS to find without pasting the
+   URL).
+4. Install it from the listing that appears, then restart Home Assistant.
+
+### Manual
+
+1. Copy `custom_components/precipitation_watch/` into your Home
+   Assistant `custom_components/` directory.
 2. Restart Home Assistant.
-3. Settings → Devices & Services → Add Integration → "Precipitation Watch".
-4. Choose:
+
+## Configuration
+
+1. Settings → Devices & Services → Add Integration → "Precipitation Watch".
+2. Choose:
    - **Fixed coordinates** — a static point (garden, cabin, ...).
-   - **Track an entity** — pick a `device_tracker` or `person` entity.
-     Your example: `device_tracker.xyz` exposing
-     `latitude`/`longitude` attributes works directly here.
-5. After creation, use the entry's **Configure** button (the gear icon —
+   - **Track an entity** — pick a `device_tracker` or `person` entity
+     that exposes `latitude`/`longitude` attributes.
+3. After creation, use the entry's **Configure** button (the gear icon —
    each watched point is its own config entry/"hub" with its own gear icon)
    to tune:
    - `update_interval_minutes` — floor between forecast refreshes (default 15)
@@ -77,18 +92,17 @@ queries (matches the original single-point behavior).
 
 ### Elevation filtering — why it exists
 
-Real-world testing at a point in the Gotthard area (46.5057°N, 8.5105°E)
-found a 3km sampling ring spanning **1414m to 2485m elevation** — a
-1000m+ swing. The higher points showed dramatically more precipitation
-(70% probability, up to 13.7mm/hr) than the exact tracked point (23%,
-under 1mm/hr). That's not a localized cell the exact point would otherwise
-miss — it's real orographic precipitation, genuinely wetter higher up as a
-physical effect of the terrain, confirmed by checking Open-Meteo's own
-docs: elevation-based downscaling in their API applies to temperature and
-temperature-derived fields, *not* precipitation, so there's no simple
-"tell it the real elevation" correction available. Blending in a ring
-point 1000m higher would systematically over-alert for a point sitting in
-a valley.
+Testing at a point in the Gotthard area (46.5057°N, 8.5105°E) found a 3km
+sampling ring spanning **1414m to 2485m elevation** — a 1000m+ swing. The
+higher points showed dramatically more precipitation (70% probability, up
+to 13.7mm/hr) than the exact tracked point (23%, under 1mm/hr). That's not
+a localized cell the exact point would otherwise miss — it's real
+orographic precipitation, genuinely wetter higher up as a physical effect
+of the terrain, confirmed by checking Open-Meteo's own docs: elevation-based
+downscaling in their API applies to temperature and temperature-derived
+fields, *not* precipitation, so there's no simple "tell it the real
+elevation" correction available. Blending in a ring point 1000m higher
+would systematically over-alert for a point sitting in a valley.
 
 `max_elevation_diff_m` fixes this using elevation data already returned
 for free in the same API response (no extra call): any ring point whose
@@ -144,9 +158,7 @@ rain soon."
 behind their app's radar view) is also published as open data, at 10-minute
 granularity. It's a separate, heavier lift: NetCDF files (not REST/JSON),
 Swiss LV95 coordinates (needs reprojection from WGS84), and access via a
-STAC search API rather than a simple GET. Not implemented here — worth a
-dedicated follow-up if `current_precipitation` still isn't tight enough for
-your use case.
+STAC search API rather than a simple GET. Not implemented here.
 
 ## Example automation (not part of the integration itself)
 
@@ -182,7 +194,36 @@ logger:
     custom_components.precipitation_watch: debug
 ```
 
-## Testing
+## Migrating from an old `swiss_rain_alert` install
+
+If you have an existing install under the old `swiss_rain_alert` domain
+(from a pre-release build of this project): the domain rename means Home
+Assistant treats it as a different integration. Remove the old config
+entries (Settings → Devices & Services → the old entries → delete), then
+add this one fresh and re-create your watched points.
+
+## Known limitations / roadmap
+
+- **No `WeatherEntity` for tracked points.** A moving point can't yet power
+  the standard HA weather forecast card the way HA core's built-in
+  Open-Meteo integration does for a fixed zone — that would need real,
+  separate work (temperature/wind/condition-code data, WMO condition-code
+  mapping, daily/hourly `Forecast` arrays). For a normal *fixed*-location
+  weather card, use HA core's built-in Open-Meteo integration directly —
+  no custom component needed for that case.
+- **Not yet exercised against a live call to the real Open-Meteo API.**
+  The client is built from Open-Meteo's documented parameter names
+  (`hourly=precipitation_probability,precipitation`, `models=best_match`)
+  and tested against a hand-built payload matching that documented shape,
+  but if the live API's response shape ever differs from what's assumed
+  here, please [open an issue](https://github.com/mkappsch/ha-precipitation-watch/issues) —
+  `api.py`'s `_parse` is the only place that would need adjusting.
+- **`binary_sensor` availability** doesn't yet distinguish "never fetched"
+  vs. "fetch failed" vs. "fetched but no rain" beyond `None`/`False`.
+- **No reconfigure flow** for switching an existing entry between
+  fixed/tracked mode — remove and re-add for now.
+
+## Contributing
 
 ```bash
 pip install -r requirements_test.txt
@@ -192,65 +233,16 @@ pytest
 - `tests/test_api.py` — pure parsing/derivation logic, no HA or network needed.
 - `tests/test_coordinator.py` — distance math (always runs) plus full
   config-entry/coordinator integration tests using
-  `pytest-homeassistant-custom-component`'s `hass` fixture and your
-  `device_tracker.xyz` fixture coordinates, with the Open-Meteo call mocked
-  out (no live network calls in tests).
+  `pytest-homeassistant-custom-component`'s `hass` fixture, with the
+  Open-Meteo call mocked out (no live network calls in tests).
 
 **Windows note:** Home Assistant core imports the POSIX-only `fcntl` module
 at startup, so the `hass`-fixture tests in `test_coordinator.py` can only run
 on Linux/macOS (or WSL) — natively on Windows even collecting them crashes
 pytest before it gets a chance to skip. Everything else (`test_api.py` plus
 the pure-math tests in `test_coordinator.py`) runs fine on Windows with
-`pytest -p no:homeassistant`. CI (`.github/workflows/test.yml`) runs the full
-suite on `ubuntu-latest`, which is the authoritative pass/fail signal.
+`pytest -p no:homeassistant`.
 
-## Migrating from the old `swiss_rain_alert` domain
-
-If you already have this installed under the old name: the domain rename
-means HA treats it as a different integration. Remove the old config
-entries (Settings → Devices & Services → the old entries → delete), install
-this version, and re-add your watched points. Sorry for the churn — better
-now than after anyone else has installed it.
-
-## Publishing checklist (HACS custom repository)
-
-- [x] `hacs.json` at repo root
-- [x] Single integration under `custom_components/precipitation_watch/`
-- [x] `custom_components/precipitation_watch/brand/icon.png` (256x256, self-hosted brand asset)
-- [x] `manifest.json`'s `codeowners`/`documentation`/`issue_tracker` point at the real repo (`mkappsch/ha-precipitation-watch`)
-- [x] Local git repo initialized, CI workflows added (`.github/workflows/test.yml` runs pytest on 3.12/3.13; `validate.yml` runs `hassfest` + the HACS validation action)
-- [ ] Push to a public GitHub repo at `github.com/mkappsch/ha-precipitation-watch`
-- [ ] Set a repo description + topics (used by HACS for search/display)
-- [ ] Cut a proper GitHub **Release** (not just a tag) matching `manifest.json`'s `version`
-- [ ] Then: HACS → ⋮ → Custom repositories → paste the repo URL
-
-Default HACS store listing (searchable without adding a custom repo URL) is
-a separate, optional, much slower step — a PR to `hacs/default` after the
-above, reviewed by HACS maintainers, commonly taking months. Not needed to
-actually use or share this integration.
-
-## Known gaps / next steps
-
-- **Deferred: a `WeatherEntity` for tracked points**, so a moving point could
-  power the standard HA weather forecast card the way HA core's built-in
-  Open-Meteo integration does for a fixed zone. Not built yet — real,
-  scoped work (temperature/wind/condition-code data, WMO condition-code
-  mapping, daily/hourly `Forecast` arrays), deferred until the sensor-based
-  approach here has proven itself. For a normal *fixed*-location weather
-  card, just use HA core's built-in Open-Meteo integration directly —
-  no custom code needed for that case.
-- No live-network verification has been done yet in this environment — the
-  API client is built from Open-Meteo's documented parameter names
-  (`hourly=precipitation_probability,precipitation`, `models=best_match`).
-  First real call should happen on your own HA instance; if the response
-  shape differs from what's assumed here, `api.py`'s `_parse` is the only
-  place that needs adjusting.
-- No `binary_sensor` availability handling yet distinguishes "never fetched"
-  vs "fetch failed" vs "fetched but no rain" beyond `None`/`False` — worth
-  tightening once you see real failure modes.
-- No reconfigure flow for switching an existing entry between fixed/tracked
-  mode — currently you'd remove and re-add.
-- `hassfest` and HACS validation now run in CI (`.github/workflows/validate.yml`)
-  on every push/PR, but the separate `home-assistant/brands` repo submission
-  (needed for the icon to show up in HA's own UI, distinct from the HACS
-  listing itself) hasn't been done yet.
+CI runs the full test suite on Linux (`.github/workflows/test.yml`) plus
+`hassfest` and HACS repository validation (`.github/workflows/validate.yml`)
+on every push and pull request — that's the authoritative pass/fail signal.

@@ -1,6 +1,6 @@
 {
   "domain": "precipitation_watch",
-  "name": "Swiss Precipitation Watch (MeteoSwiss data via Open-Meteo)",
+  "name": "Precipitation Watch",
   "codeowners": ["@mkappsch"],
   "config_flow": true,
   "documentation": "https://github.com/mkappsch/ha-precipitation-watch",
