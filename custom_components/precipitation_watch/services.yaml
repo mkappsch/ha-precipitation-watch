@@ -3,6 +3,11 @@ refresh:
   description: >-
     Force an immediate forecast fetch for a watched point, bypassing both
     the time-based and distance-based throttles. Useful for manual testing.
-  target:
-    device:
-      integration: precipitation_watch
+  fields:
+    device_id:
+      name: Device
+      description: The watched point's device to refresh.
+      required: true
+      selector:
+        device:
+          integration: precipitation_watch
