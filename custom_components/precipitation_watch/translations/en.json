@@ -1,0 +1,72 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Watch a point for precipitation",
+        "description": "Choose whether this watched point stays fixed or follows another entity (e.g. a device_tracker).",
+        "data": {
+          "mode": "Mode"
+        }
+      },
+      "fixed": {
+        "title": "Fixed coordinates",
+        "data": {
+          "name": "Name",
+          "latitude": "Latitude",
+          "longitude": "Longitude"
+        }
+      },
+      "tracked": {
+        "title": "Track an entity",
+        "description": "Pick any entity that exposes latitude/longitude attributes (device_tracker, person, ...).",
+        "data": {
+          "name": "Name",
+          "tracked_entity_id": "Entity to track"
+        }
+      }
+    },
+    "error": {
+      "entity_not_found": "That entity could not be found.",
+      "entity_missing_coordinates": "That entity has no latitude/longitude attributes right now."
+    },
+    "abort": {
+      "already_configured": "This point is already being watched."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Throttling, alert thresholds and display windows",
+        "data": {
+          "update_interval_minutes": "Minimum minutes between forecast refreshes",
+          "min_distance_meters": "Minimum movement (meters) before re-fetching (tracked mode only)",
+          "probability_threshold": "Precipitation probability threshold (%) -- drives the alert binary_sensor",
+          "lookahead_hours": "Alert lookahead window (hours) -- drives the alert binary_sensor",
+          "display_windows_hours": "Display windows (comma-separated hours, e.g. 1,3,6) -- creates a probability + amount sensor per value",
+          "sample_radius_km": "Nearby-point sampling radius (km, 0 = disabled)",
+          "max_elevation_diff_m": "Max elevation difference for sample points (m)"
+        }
+      }
+    },
+    "error": {
+      "invalid_windows": "{windows_error}"
+    }
+  },
+  "selector": {
+    "mode": {
+      "options": {
+        "fixed": "Fixed coordinates",
+        "tracked": "Track an entity"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "next_precipitation_time": { "name": "Next precipitation time" },
+      "current_precipitation": { "name": "Current precipitation" }
+    },
+    "binary_sensor": {
+      "precipitation_expected": { "name": "Precipitation expected" }
+    }
+  }
+}
