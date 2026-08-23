@@ -1,4 +1,4 @@
-# Precipitation Watch
+# Point Weather Watch
 
 > **Not affiliated with, endorsed by, or sponsored by MeteoSwiss, the
 > Federal Office of Meteorology and Climatology, or Open-Meteo.** This is
@@ -7,22 +7,24 @@
 > is named here only to accurately describe the data source, per its
 > [Open Data terms](https://opendatadocs.meteoswiss.ch).
 
-A generic Home Assistant integration: give it a point — fixed coordinates,
-or any entity that exposes `latitude`/`longitude` attributes (a
-`device_tracker`, a `person`, etc.) — and it produces precipitation
-probability / amount / next-rain-time entities for that point, wherever it
-currently is.
+A Home Assistant weather integration powered by Open-Meteo: give it a
+point — fixed coordinates, or any entity that exposes
+`latitude`/`longitude` attributes (a `device_tracker`, a `person`, etc.) —
+and it produces a full weather entity (current conditions, hourly and
+daily forecast) plus precipitation probability/amount/next-rain-time
+alert entities for that point, wherever it currently is.
+
+**Tuned for Switzerland and the Alps, works worldwide.** Open-Meteo's
+`best_match` uses MeteoSwiss's high-resolution regional model
+(ICON-CH1/CH2) specifically for Switzerland and the Alps — real,
+localized data, not a generic global model — and falls back to other
+models elsewhere. Point it anywhere and it works; the accuracy advantage
+this integration is built around is regional.
 
 It does **not** know or care about specific use cases like "car parking
 alerts." That logic belongs in your own automations, triggered off the
 `binary_sensor.<name>_precipitation_expected` entity this integration
 creates.
-
-**Works globally, best in Switzerland/the Alps.** Open-Meteo's `best_match`
-uses MeteoSwiss's high-resolution regional model (ICON-CH1/CH2) specifically
-for Switzerland and the Alps, and falls back to other models elsewhere —
-there's no hard geographic restriction, but the accuracy advantage this
-integration is built around is regional.
 
 ## Data source
 
@@ -56,10 +58,11 @@ either:
 
 Don't be surprised by a few degrees' difference or a differing condition
 word between this and an official-source integration for the same
-location. **This hasn't been validated for real-world accuracy yet** — if
-you track it against actual conditions at your watched points, [issue
-reports](https://github.com/mkappsch/ha-precipitation-watch/issues) on
-systematic bias would be genuinely useful.
+location. **This hasn't been validated for real-world accuracy yet, and
+we'd love testers.** If you run it for a while — whether you spot a
+systematic bias, a bug, or just have thoughts on what's missing —
+[issue reports](https://github.com/mkappsch/ha-precipitation-watch/issues)
+are genuinely welcome.
 
 ## Installation
 

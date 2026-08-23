@@ -1,6 +1,6 @@
 {
   "domain": "precipitation_watch",
-  "name": "Precipitation Watch",
+  "name": "Point Weather Watch",
   "codeowners": ["@mkappsch"],
   "config_flow": true,
   "documentation": "https://github.com/mkappsch/ha-precipitation-watch",
@@ -8,5 +8,5 @@
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/mkappsch/ha-precipitation-watch/issues",
   "requirements": [],
-  "version": "0.2.0"
+  "version": "0.2.1"
 }

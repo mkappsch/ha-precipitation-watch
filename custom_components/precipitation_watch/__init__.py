@@ -52,7 +52,7 @@ async def _async_handle_refresh(call: ServiceCall) -> None:
 
     if not coordinators:
         raise ServiceValidationError(
-            "No Precipitation Watch device found for the given target."
+            "No Point Weather Watch device found for the given target."
         )
 
     for coordinator in coordinators:
