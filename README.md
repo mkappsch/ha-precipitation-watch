@@ -7,24 +7,56 @@
 > is named here only to accurately describe the data source, per its
 > [Open Data terms](https://opendatadocs.meteoswiss.ch).
 
-A Home Assistant weather integration powered by Open-Meteo: give it a
-point — fixed coordinates, or any entity that exposes
-`latitude`/`longitude` attributes (a `device_tracker`, a `person`, etc.) —
-and it produces a full weather entity (current conditions, hourly and
-daily forecast) plus precipitation probability/amount/next-rain-time
-alert entities for that point, wherever it currently is.
-
-**Tuned for Switzerland and the Alps, works worldwide.** Open-Meteo's
-`best_match` uses MeteoSwiss's high-resolution regional model
-(ICON-CH1/CH2) specifically for Switzerland and the Alps — real,
-localized data, not a generic global model — and falls back to other
-models elsewhere. Point it anywhere and it works; the accuracy advantage
-this integration is built around is regional.
+A Home Assistant weather integration that **follows a moving point**: give
+it fixed coordinates, or any entity that exposes `latitude`/`longitude`
+attributes (a `device_tracker`, a `person`, etc.), and it produces a full
+weather entity (current conditions, hourly and daily forecast) plus
+**configurable precipitation alert entities** — threshold and lookahead
+window, tunable per watched point — for that point, wherever it currently
+is. Home Assistant's own built-in weather integrations are fixed-zone
+only; this one moves with a tracked entity, and ships alerting you'd
+otherwise have to build yourself from a plain weather entity.
 
 It does **not** know or care about specific use cases like "car parking
 alerts." That logic belongs in your own automations, triggered off the
 `binary_sensor.<name>_precipitation_expected` entity this integration
 creates.
+
+## When to use this vs. Home Assistant's built-in Open-Meteo integration
+
+Home Assistant core already ships an official, zero-install Open-Meteo
+integration (`open_meteo`) — no HACS, nothing to configure beyond picking
+a zone. For a normal fixed-location weather card, **use that one first**:
+the underlying forecast data is identical either way, since Open-Meteo's
+automatic `best_match` model selection (MeteoSwiss's high-resolution
+ICON-CH1/CH2 inside Switzerland/the Alps) is the default behavior
+regardless of which integration asks for it — not something exclusive to
+this project.
+
+Reach for this integration instead when you need:
+
+| | HA core's built-in `open_meteo` | This integration |
+|---|---|---|
+| Fixed-point weather (current + forecast) | ✓ | ✓ (identical data) |
+| **Follows a moving entity** (`device_tracker`, `person`) | Not possible — fixed zone only | ✓ core feature |
+| Configurable precipitation alert (`binary_sensor`, threshold + lookahead) | Build it yourself from the weather entity | ✓ out of the box |
+| "Is it raining right now" nowcast sensor, distinct from the hourly forecast | No | ✓ |
+| `next_precipitation_time` sensor | No | ✓ |
+| Multiple forecast windows side by side (1h / 3h / 6h...) | No | ✓ |
+| Nearby-point sampling + elevation filtering (catches localized cells, avoids mountain-elevation contamination) | No | ✓ |
+| Install | Built-in | HACS custom repository |
+
+If you only ever want a weather card for one fixed spot, HA core's own
+integration is simpler and needs nothing extra installed. This project
+exists for everything a fixed zone can't do.
+
+**Tuned for Switzerland and the Alps, works worldwide.** Open-Meteo's
+`best_match` uses MeteoSwiss's high-resolution regional model
+(ICON-CH1/CH2) specifically for Switzerland and the Alps — real,
+localized data, not a generic global model — and falls back to other
+models elsewhere. That data-quality baseline is shared with HA core's
+own integration for fixed points (see above); what this project adds on
+top is everything in the table.
 
 ## Data source
 
