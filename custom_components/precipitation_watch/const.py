@@ -49,10 +49,11 @@ API_BASE_URL = "https://api.open-meteo.com/v1/forecast"
 API_TIMEOUT_SECONDS = 15
 ATTRIBUTION = "Weather data by Open-Meteo.com (MeteoSwiss ICON model, CC BY 4.0)"
 
-# How many hours of hourly forecast to request/keep around. 48h (rather than
-# just covering display_windows_hours' 24h cap) so weather.py's hourly
-# forecast has more than a single day to show.
-FORECAST_HOURS_REQUESTED = 48
+# How many hours of hourly forecast to request/keep around. Also what
+# weather.py's twice-daily forecast is built from (day/night blocks grouped
+# from these same hours) -- matches FORECAST_DAYS_REQUESTED's week so
+# twice-daily doesn't run out of days sooner than the daily tab does.
+FORECAST_HOURS_REQUESTED = 24 * 7
 # How many days of daily forecast to request, for weather.py's daily forecast.
 FORECAST_DAYS_REQUESTED = 7
 

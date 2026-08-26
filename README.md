@@ -185,6 +185,7 @@ conservative behavior.
 
 | Entity | Description |
 |---|---|
+| `weather.<name>` | Current conditions + daily / hourly / twice-daily forecast — see [How the weather entity's condition/icon is calculated](#how-the-weather-entitys-conditionicon-is-calculated) below |
 | `sensor.<name>_precipitation_probability_<N>h` | Max probability (%) within an N-hour window — one pair per entry in `display_windows_hours` (**forecast**) |
 | `sensor.<name>_precipitation_amount_<N>h` | Summed expected precipitation (mm) within that same N-hour window (**forecast**) |
 | `sensor.<name>_next_precipitation_time` | Timestamp of the next hour crossing your threshold, using `lookahead_hours` — **forecast** |
@@ -197,6 +198,65 @@ Set it to `1,3,6` to also get 3h and 6h variants of both, e.g. to compare
 "is it about to rain" against "will it rain sometime this afternoon" without
 touching the alert logic at all — the binary sensor stays governed solely by
 `lookahead_hours`, independent of how many display windows you add.
+
+### How the weather entity's condition/icon is calculated
+
+`weather.<name>` supports three forecast types: `daily`, `hourly`, and
+`twice_daily` (day + night, two entries per date). The **headline
+condition** (the entity's main state) and the **daily** forecast's single
+icon are *not* simply Open-Meteo's own `weather_code` — both are computed
+from this integration's own hourly data instead, for a documented reason.
+
+Open-Meteo's own daily aggregate is defined, in their own words, as "the
+most severe weather condition on a given day" — no further elaboration.
+In practice, a single bad hour, however brief or late in the day, can
+define the icon for the whole day. Verified against real forecast data:
+a day with 20 of 24 hours clear still showed "cloudy" for the whole day
+off one single 17:00 hour; a separate day that was completely dry until
+21:00 showed "rain" for the whole day off three overnight hours. Neither
+result is *wrong* exactly, but neither is representative either.
+
+**What this integration does instead:**
+
+- Hourly data is grouped into day/night blocks — a "night" runs from one
+  date's dusk through the *next* date's dawn (the "tonight" convention
+  forecasters use, not calendar-midnight-aligned), so an overnight
+  shower doesn't get split across two entries.
+- Within a block, a **real Home Assistant combo condition** wins outright
+  if it applies: `snowy-rainy` if the block has both rain and snow hours,
+  `lightning-rainy` if it has both rain and thunder. These aren't
+  invented — Home Assistant's weather entity model only recognizes a
+  fixed set of ~15 condition strings with pre-drawn icons, and these two
+  combos are the only ones it ships built in. There's no way to fabricate
+  a "sunny-rainy" icon, for example, so anything outside those two combos
+  falls back to picking one single condition.
+- Otherwise, the **most severe condition covering at least 30% of the
+  block's hours** wins (checked most-severe-first, which doubles as the
+  tie-break toward the worse outcome on an even split), falling back to
+  whichever condition is most common if nothing clears that bar. This
+  filters out a single fluky hour while still escalating a block that's
+  genuinely, substantially mixed rather than just occasionally so.
+- `precipitation_probability` and the summed `native_precipitation` for
+  each block/day are **not** touched by any of this — they stay as
+  honest max/sum aggregates. So even a day whose *icon* shows sun still
+  reports its real rain probability and amount as separate numbers.
+  Nothing is hidden; the icon just isn't asked to carry information a
+  single glyph structurally can't.
+- The **daily** forecast (one icon per date) uses this same picking logic
+  across the whole day's hours, falling back to Open-Meteo's own
+  `daily.weather_code` only for a date outside the 7-day hourly window's
+  exact coverage.
+- The **headline `condition`** is the picked condition for whichever
+  day/night block "right now" falls into — not Open-Meteo's raw
+  `current.weather_code` — so it can't disagree with the twice-daily
+  forecast card sitting right below it for the same stretch of time.
+
+Validated against a real rain-to-snow transition day: 9 of 11 daytime
+hours were genuinely raining, with only the last 2 turning to snow.
+Open-Meteo's own daily code said "heavy snow" for the whole day, hiding
+that it rains through most of the actual daylight hours. This
+integration's day block correctly resolves to `snowy-rainy` (the real HA
+combo, not a fabricated one), and the night block to `snowy`.
 
 ### Forecast vs. "right now" — read this before relying on it for alerts
 

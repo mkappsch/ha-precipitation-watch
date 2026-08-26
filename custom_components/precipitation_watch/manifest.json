@@ -8,5 +8,5 @@
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/mkappsch/ha-precipitation-watch/issues",
   "requirements": [],
-  "version": "0.2.2"
+  "version": "0.3.0"
 }

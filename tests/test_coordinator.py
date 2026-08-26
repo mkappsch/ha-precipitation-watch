@@ -287,3 +287,16 @@ async def test_weather_entity_reports_current_conditions_and_forecasts(
     assert len(hourly) == 24
     assert hourly[3]["condition"] == "rainy"  # sample_payload's rainy_hour_index=3, WMO code 61
     assert hourly[3]["temperature"] == pytest.approx(18.3)
+
+    twice_daily_response = await hass.services.async_call(
+        "weather", "get_forecasts", {"entity_id": "weather.car", "type": "twice_daily"},
+        blocking=True, return_response=True,
+    )
+    twice_daily = twice_daily_response["weather.car"]["forecast"]
+    # sample_payload's conftest fixture marks every hour is_day=True, so this
+    # collapses to a single day block (no night block to split into) -- the
+    # day/night split logic itself is covered thoroughly in test_weather.py's
+    # unit tests; this just confirms the platform wires it up without error.
+    assert len(twice_daily) == 1
+    assert twice_daily[0]["is_daytime"] is True
+    assert twice_daily[0]["condition"] == "sunny"  # 1 of 24 hours rainy -- below the escalation threshold
