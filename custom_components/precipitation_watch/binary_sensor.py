@@ -47,6 +47,20 @@ class PrecipitationExpectedBinarySensor(CoordinatorEntity[PrecipitationCoordinat
         )
 
     @property
+    def available(self) -> bool:
+        # Overrides CoordinatorEntity's default (tied strictly to the most
+        # recent fetch's success/failure): stays available as long as we've
+        # ever had one successful fetch, so a transient failure reports the
+        # last-known-good state instead of flapping unavailable and breaking
+        # the history graph over one bad poll. Home Assistant doesn't expose
+        # extra_state_attributes at all while an entity is unavailable, so
+        # this is also what makes last_update_success/last_fetch_error below
+        # actually visible during an outage -- without it, the one attribute
+        # meant to explain "why don't I know right now" would itself
+        # disappear at exactly the moment it's needed.
+        return self.coordinator.data is not None
+
+    @property
     def is_on(self) -> bool | None:
         if not self.coordinator.data:
             return None
@@ -59,15 +73,27 @@ class PrecipitationExpectedBinarySensor(CoordinatorEntity[PrecipitationCoordinat
 
     @property
     def extra_state_attributes(self) -> dict:
+        # last_update_success/last_fetch_error distinguish "fetched, no rain"
+        # (is_on False, last_update_success True) from "we don't actually
+        # know right now" (is_on still reflects the last-known-good forecast,
+        # but last_update_success False + last_fetch_error explain why it
+        # might be stale).
+        attrs = {
+            "last_update_success": self.coordinator.last_update_success,
+            "last_fetch_error": str(self.coordinator.last_exception) if self.coordinator.last_exception else None,
+        }
         if not self.coordinator.data:
-            return {}
+            return attrs
         threshold = self._entry.options.get(CONF_PROBABILITY_THRESHOLD, DEFAULT_PROBABILITY_THRESHOLD)
         lookahead = self._entry.options.get(CONF_LOOKAHEAD_HOURS, DEFAULT_LOOKAHEAD_HOURS)
         next_time = self.coordinator.data.next_time_above_threshold(lookahead, threshold)
-        return {
-            "threshold_percent": threshold,
-            "lookahead_hours": lookahead,
-            "next_time_above_threshold": next_time.isoformat() if next_time else None,
-            "latitude": self.coordinator.data.latitude,
-            "longitude": self.coordinator.data.longitude,
-        }
+        attrs.update(
+            {
+                "threshold_percent": threshold,
+                "lookahead_hours": lookahead,
+                "next_time_above_threshold": next_time.isoformat() if next_time else None,
+                "latitude": self.coordinator.data.latitude,
+                "longitude": self.coordinator.data.longitude,
+            }
+        )
+        return attrs

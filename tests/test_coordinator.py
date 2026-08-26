@@ -40,12 +40,14 @@ def test_haversine_known_short_distance():
 
 # --- Tier 2: full config-entry + coordinator wiring -------------------------
 
-from pytest_homeassistant_custom_component.common import MockConfigEntry  # noqa: E402
+from homeassistant.util import dt as dt_util
+from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed  # noqa: E402
 
 from custom_components.precipitation_watch.const import (  # noqa: E402
     CONF_LOOKAHEAD_HOURS,
     CONF_MODE,
     CONF_MIN_DISTANCE_M,
+    CONF_MOVEMENT_SETTLE_SECONDS,
     CONF_NAME,
     CONF_TRACKED_ENTITY_ID,
     CONF_UPDATE_INTERVAL_MIN,
@@ -207,7 +209,10 @@ async def test_movement_refresh_allowed_once_update_interval_elapses(
             CONF_NAME: "Car",
             CONF_TRACKED_ENTITY_ID: DEVICE_TRACKER_ENTITY_ID,
         },
-        options={CONF_MIN_DISTANCE_M: 50, CONF_UPDATE_INTERVAL_MIN: 15},
+        # Settle debounce disabled -- this test is specifically about the
+        # update_interval floor, which the settle debounce (tested on its
+        # own elsewhere) would otherwise delay this fetch a second time.
+        options={CONF_MIN_DISTANCE_M: 50, CONF_UPDATE_INTERVAL_MIN: 15, CONF_MOVEMENT_SETTLE_SECONDS: 0},
     )
     entry.add_to_hass(hass)
 
@@ -304,3 +309,267 @@ async def test_weather_entity_reports_current_conditions_and_forecasts(
     assert len(twice_daily) >= 1
     assert all(entry["is_daytime"] is True for entry in twice_daily)
     assert twice_daily[0]["condition"] == "sunny"  # 1 of 24 hours rainy -- below the escalation threshold
+
+
+# --- Movement settle debounce ------------------------------------------------
+
+
+async def test_movement_settle_debounce_delays_fetch_until_movement_stops(
+    hass, enable_custom_integrations, mock_forecast_result, freezer
+):
+    """A qualifying move doesn't fetch immediately -- it waits for movement
+    to actually stop for movement_settle_seconds, and a further qualifying
+    move before that resets the wait rather than adding a second one."""
+    hass.states.async_set(
+        DEVICE_TRACKER_ENTITY_ID,
+        "home",
+        {"latitude": DEVICE_TRACKER_LATITUDE, "longitude": DEVICE_TRACKER_LONGITUDE},
+    )
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_MODE: MODE_TRACKED,
+            CONF_NAME: "Car",
+            CONF_TRACKED_ENTITY_ID: DEVICE_TRACKER_ENTITY_ID,
+        },
+        # update_interval kept large so the periodic timer can't also fire
+        # during this test's freezer ticks -- the settle debounce is what's
+        # under test here, not the (separately, already-tested) floor.
+        options={CONF_MIN_DISTANCE_M: 50, CONF_UPDATE_INTERVAL_MIN: 30, CONF_MOVEMENT_SETTLE_SECONDS: 60},
+    )
+    entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.precipitation_watch.api.OpenMeteoClient.async_get_forecast",
+        AsyncMock(return_value=mock_forecast_result),
+    ) as mocked_fetch:
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        assert mocked_fetch.await_count == 1
+
+        # Pre-clear the update_interval floor directly, without touching HA's
+        # own scheduler -- keeps this test isolated to the settle debounce.
+        coordinator = hass.data[DOMAIN][entry.entry_id]
+        coordinator._last_fetch_time = dt_util.utcnow() - timedelta(hours=1)
+
+        hass.states.async_set(
+            DEVICE_TRACKER_ENTITY_ID,
+            "home",
+            {"latitude": DEVICE_TRACKER_LATITUDE + 0.01, "longitude": DEVICE_TRACKER_LONGITUDE},
+        )
+        await hass.async_block_till_done()
+        assert mocked_fetch.await_count == 1  # qualifies, but hasn't settled yet
+
+        # Move again well before the 60s settle window elapses -- resets it.
+        freezer.tick(timedelta(seconds=30))
+        async_fire_time_changed(hass, dt_util.utcnow())
+        await hass.async_block_till_done()
+        hass.states.async_set(
+            DEVICE_TRACKER_ENTITY_ID,
+            "home",
+            {"latitude": DEVICE_TRACKER_LATITUDE + 0.02, "longitude": DEVICE_TRACKER_LONGITUDE},
+        )
+        await hass.async_block_till_done()
+        assert mocked_fetch.await_count == 1  # still waiting -- the move reset the timer
+
+        # Now let 61s pass with no further movement -- it settles, fetch fires.
+        freezer.tick(timedelta(seconds=61))
+        async_fire_time_changed(hass, dt_util.utcnow())
+        await hass.async_block_till_done()
+
+    assert mocked_fetch.await_count == 2
+
+
+async def test_movement_settle_seconds_zero_fetches_immediately(hass, enable_custom_integrations, mock_forecast_result):
+    """settle_seconds=0 opts back out to the old immediate-fetch behavior."""
+    hass.states.async_set(
+        DEVICE_TRACKER_ENTITY_ID,
+        "home",
+        {"latitude": DEVICE_TRACKER_LATITUDE, "longitude": DEVICE_TRACKER_LONGITUDE},
+    )
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_MODE: MODE_TRACKED,
+            CONF_NAME: "Car",
+            CONF_TRACKED_ENTITY_ID: DEVICE_TRACKER_ENTITY_ID,
+        },
+        options={CONF_MIN_DISTANCE_M: 50, CONF_MOVEMENT_SETTLE_SECONDS: 0},
+    )
+    entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.precipitation_watch.api.OpenMeteoClient.async_get_forecast",
+        AsyncMock(return_value=mock_forecast_result),
+    ) as mocked_fetch:
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        assert mocked_fetch.await_count == 1
+
+        coordinator = hass.data[DOMAIN][entry.entry_id]
+        coordinator._last_fetch_time = dt_util.utcnow() - timedelta(hours=1)
+
+        hass.states.async_set(
+            DEVICE_TRACKER_ENTITY_ID,
+            "home",
+            {"latitude": DEVICE_TRACKER_LATITUDE + 0.01, "longitude": DEVICE_TRACKER_LONGITUDE},
+        )
+        await hass.async_block_till_done()
+
+    assert mocked_fetch.await_count == 2
+
+
+# --- API calls today diagnostic sensor ---------------------------------------
+
+
+async def test_api_calls_today_sensor_counts_the_setup_fetch(hass, enable_custom_integrations, mock_forecast_result):
+    hass.states.async_set(
+        DEVICE_TRACKER_ENTITY_ID,
+        "home",
+        {"latitude": DEVICE_TRACKER_LATITUDE, "longitude": DEVICE_TRACKER_LONGITUDE},
+    )
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_MODE: MODE_TRACKED, CONF_NAME: "Car", CONF_TRACKED_ENTITY_ID: DEVICE_TRACKER_ENTITY_ID},
+    )
+    entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.precipitation_watch.api.OpenMeteoClient.async_get_forecast",
+        AsyncMock(return_value=mock_forecast_result),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    state = hass.states.get("sensor.car_api_calls_today")
+    assert state is not None
+    assert state.state == "1"
+
+
+async def test_api_calls_today_counts_failed_attempts_too(hass, enable_custom_integrations):
+    """A failed fetch still made the outbound call -- it should still count
+    against the quota, same as the debug-logging method the README already
+    documents (every attempt logs a line, success or not)."""
+    from homeassistant.helpers.update_coordinator import UpdateFailed
+
+    from custom_components.precipitation_watch.api import ApiError
+    from custom_components.precipitation_watch.coordinator import PrecipitationCoordinator
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_MODE: MODE_TRACKED, CONF_NAME: "Car", CONF_TRACKED_ENTITY_ID: DEVICE_TRACKER_ENTITY_ID},
+    )
+    entry.add_to_hass(hass)
+    hass.states.async_set(
+        DEVICE_TRACKER_ENTITY_ID,
+        "home",
+        {"latitude": DEVICE_TRACKER_LATITUDE, "longitude": DEVICE_TRACKER_LONGITUDE},
+    )
+    coordinator = PrecipitationCoordinator(hass, entry)
+
+    with patch(
+        "custom_components.precipitation_watch.api.OpenMeteoClient.async_get_forecast",
+        AsyncMock(side_effect=ApiError("boom")),
+    ):
+        with pytest.raises(UpdateFailed):
+            await coordinator._async_update_data()
+
+    assert coordinator.api_calls_today == 1
+
+
+async def test_api_calls_today_resets_on_a_new_day(hass, enable_custom_integrations, mock_forecast_result, freezer):
+    hass.states.async_set(
+        DEVICE_TRACKER_ENTITY_ID,
+        "home",
+        {"latitude": DEVICE_TRACKER_LATITUDE, "longitude": DEVICE_TRACKER_LONGITUDE},
+    )
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_MODE: MODE_TRACKED, CONF_NAME: "Car", CONF_TRACKED_ENTITY_ID: DEVICE_TRACKER_ENTITY_ID},
+    )
+    entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.precipitation_watch.api.OpenMeteoClient.async_get_forecast",
+        AsyncMock(return_value=mock_forecast_result),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        coordinator = hass.data[DOMAIN][entry.entry_id]
+        assert coordinator.api_calls_today == 1
+
+        freezer.tick(timedelta(days=1))
+        await coordinator._async_update_data()
+
+    assert coordinator.api_calls_today == 1  # reset for the new day, not 2
+
+
+# --- binary_sensor diagnostic attributes -------------------------------------
+
+
+async def test_binary_sensor_reports_success_and_no_error_when_healthy(
+    hass, enable_custom_integrations, mock_forecast_result
+):
+    hass.states.async_set(
+        DEVICE_TRACKER_ENTITY_ID,
+        "home",
+        {"latitude": DEVICE_TRACKER_LATITUDE, "longitude": DEVICE_TRACKER_LONGITUDE},
+    )
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_MODE: MODE_TRACKED, CONF_NAME: "Car", CONF_TRACKED_ENTITY_ID: DEVICE_TRACKER_ENTITY_ID},
+    )
+    entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.precipitation_watch.api.OpenMeteoClient.async_get_forecast",
+        AsyncMock(return_value=mock_forecast_result),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    state = hass.states.get("binary_sensor.car_precipitation_expected")
+    assert state.attributes["last_update_success"] is True
+    assert state.attributes["last_fetch_error"] is None
+
+
+async def test_binary_sensor_surfaces_the_error_after_a_failed_refresh(
+    hass, enable_custom_integrations, mock_forecast_result
+):
+    """Distinguishes "fetched, no rain" from "we don't actually know right
+    now" -- is_on keeps reporting the last-known-good forecast (doesn't flap
+    unavailable over one bad poll), but the error attribute explains why a
+    fresher answer isn't available."""
+    from custom_components.precipitation_watch.api import ApiError
+
+    hass.states.async_set(
+        DEVICE_TRACKER_ENTITY_ID,
+        "home",
+        {"latitude": DEVICE_TRACKER_LATITUDE, "longitude": DEVICE_TRACKER_LONGITUDE},
+    )
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_MODE: MODE_TRACKED, CONF_NAME: "Car", CONF_TRACKED_ENTITY_ID: DEVICE_TRACKER_ENTITY_ID},
+    )
+    entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.precipitation_watch.api.OpenMeteoClient.async_get_forecast",
+        AsyncMock(return_value=mock_forecast_result),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    with patch(
+        "custom_components.precipitation_watch.api.OpenMeteoClient.async_get_forecast",
+        AsyncMock(side_effect=ApiError("network boom")),
+    ):
+        await coordinator.async_refresh()
+        await hass.async_block_till_done()
+
+    state = hass.states.get("binary_sensor.car_precipitation_expected")
+    assert state.attributes["last_update_success"] is False
+    assert "network boom" in state.attributes["last_fetch_error"]

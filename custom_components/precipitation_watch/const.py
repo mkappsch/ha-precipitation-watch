@@ -26,6 +26,15 @@ CONF_LOOKAHEAD_HOURS = "lookahead_hours"
 CONF_DISPLAY_WINDOWS_HOURS = "display_windows_hours"
 CONF_SAMPLE_RADIUS_KM = "sample_radius_km"
 CONF_MAX_ELEVATION_DIFF_M = "max_elevation_diff_m"
+# How long a tracked point must stop crossing min_distance_meters before a
+# movement-triggered refresh actually fires, resetting on every further
+# qualifying move. Avoids fetching mid-transit (e.g. every 200m of a drive)
+# for a fetch that's stale again a minute later -- 0 disables this and
+# fetches immediately on qualifying movement instead (the old behavior).
+# This is on top of, not instead of, the update_interval floor: the
+# periodic timer still fetches on its own schedule regardless of whether
+# movement ever "settles".
+CONF_MOVEMENT_SETTLE_SECONDS = "movement_settle_seconds"
 
 DEFAULT_UPDATE_INTERVAL_MIN = 15
 DEFAULT_MIN_DISTANCE_M = 200
@@ -43,6 +52,7 @@ DEFAULT_SAMPLE_RADIUS_KM = 3
 # precipitation, not a cell we'd otherwise miss. 300m is a starting point,
 # not a validated constant -- tune per how mountainous your watched points are.
 DEFAULT_MAX_ELEVATION_DIFF_M = 300
+DEFAULT_MOVEMENT_SETTLE_SECONDS = 600
 
 # --- API -------------------------------------------------------------------
 API_BASE_URL = "https://api.open-meteo.com/v1/forecast"

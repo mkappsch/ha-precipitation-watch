@@ -18,6 +18,7 @@ from .const import (
     CONF_MAX_ELEVATION_DIFF_M,
     CONF_MIN_DISTANCE_M,
     CONF_MODE,
+    CONF_MOVEMENT_SETTLE_SECONDS,
     CONF_NAME,
     CONF_PROBABILITY_THRESHOLD,
     CONF_SAMPLE_RADIUS_KM,
@@ -27,6 +28,7 @@ from .const import (
     DEFAULT_LOOKAHEAD_HOURS,
     DEFAULT_MAX_ELEVATION_DIFF_M,
     DEFAULT_MIN_DISTANCE_M,
+    DEFAULT_MOVEMENT_SETTLE_SECONDS,
     DEFAULT_PROBABILITY_THRESHOLD,
     DEFAULT_SAMPLE_RADIUS_KM,
     DEFAULT_UPDATE_INTERVAL_MIN,
@@ -161,6 +163,10 @@ class PrecipitationWatchOptionsFlow(config_entries.OptionsFlow):
                     CONF_MIN_DISTANCE_M,
                     default=current.get(CONF_MIN_DISTANCE_M, DEFAULT_MIN_DISTANCE_M),
                 ): vol.All(vol.Coerce(int), vol.Range(min=0, max=50000)),
+                vol.Required(
+                    CONF_MOVEMENT_SETTLE_SECONDS,
+                    default=current.get(CONF_MOVEMENT_SETTLE_SECONDS, DEFAULT_MOVEMENT_SETTLE_SECONDS),
+                ): vol.All(vol.Coerce(int), vol.Range(min=0, max=1800)),
                 vol.Required(
                     CONF_PROBABILITY_THRESHOLD,
                     default=current.get(CONF_PROBABILITY_THRESHOLD, DEFAULT_PROBABILITY_THRESHOLD),

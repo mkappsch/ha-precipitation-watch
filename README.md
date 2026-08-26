@@ -128,6 +128,7 @@ are genuinely welcome.
    to tune:
    - `update_interval_minutes` — floor between forecast refreshes (default 15)
    - `min_distance_meters` — for tracked mode, how far the point must move before re-fetching (default 200m)
+   - `movement_settle_seconds` — for tracked mode, how long movement must stop before a movement-triggered refresh actually fires, resetting on every further qualifying move (default 600s / 10min, 0 = fetch immediately instead) — see below
    - `probability_threshold` — % that flips the alert binary sensor on (default 50)
    - `lookahead_hours` — window used by the alert binary sensor + next-precipitation-time sensor (default 1)
    - `display_windows_hours` — comma-separated hours, e.g. `1,3,6,12` — creates a probability + amount sensor pair *per value*, for browsing multiple horizons side by side (default `1`, max 6 values, each 1-24h)
@@ -136,6 +137,29 @@ are genuinely welcome.
 
    Changing any of these and saving reloads the entry, so entities (including
    the per-window ones) regenerate automatically to match.
+
+### Movement settle debounce — why it exists
+
+Without it, a continuously-moving tracked point (e.g. driving) would
+trigger a refresh every time it crosses `min_distance_meters` — every
+~12 seconds of a highway drive at the default 200m — for a fetch that's
+stale again a minute later and tells you nothing useful about a route
+you're still on. `movement_settle_seconds` delays the actual
+movement-triggered fetch until the point has stopped crossing that
+threshold for the configured duration, resetting the wait on every
+further qualifying move. You only get the extra fetch once you've
+actually arrived somewhere.
+
+This doesn't reduce how often you get updates during a long drive: the
+periodic `update_interval_minutes` timer keeps fetching on its own
+schedule the entire time, completely independent of whether movement
+ever "settles". The settle debounce only affects the *extra*,
+movement-triggered fetches layered on top of that baseline — it
+suppresses the pointless in-transit ones, not the periodic ones.
+
+Set `movement_settle_seconds` to `0` to disable this and fetch
+immediately on qualifying movement instead, if you'd rather trade the
+occasional wasted mid-transit fetch for lower latency on arrival.
 
 ### Nearby-point sampling (accuracy improvement)
 
@@ -192,7 +216,8 @@ conservative behavior.
 | `sensor.<name>_precipitation_amount_<N>h` | Summed expected precipitation (mm) within that same N-hour window (**forecast**) |
 | `sensor.<name>_next_precipitation_time` | Timestamp of the next hour crossing your threshold, using `lookahead_hours` — **forecast** |
 | `sensor.<name>_current_precipitation` | Observed/nowcast-blended precipitation (mm) **right now** — see below |
-| `binary_sensor.<name>_precipitation_expected` | On/off, using `probability_threshold` + `lookahead_hours` — this is what your automations should trigger on |
+| `sensor.<name>_api_calls_today` | Open-Meteo fetch attempts since local midnight, success or failure — diagnostic; see [API usage & rate limits](#api-usage--rate-limits) |
+| `binary_sensor.<name>_precipitation_expected` | On/off, using `probability_threshold` + `lookahead_hours` — this is what your automations should trigger on. Stays available (reporting the last-known-good state) through a transient fetch failure rather than flapping unavailable; `last_update_success` and `last_fetch_error` attributes tell you whether that state might be stale and why |
 
 With the default `display_windows_hours = "1"`, you get exactly the original
 two sensors (`_precipitation_probability_1h`, `_precipitation_amount_1h`).
@@ -333,18 +358,20 @@ close to these:
   (5), that's 480 calls/day per point, under 5% of the daily budget.
 - There's no usage dashboard or rate-limit info for the free/keyless
   tier — checked directly, Open-Meteo's responses carry no `X-RateLimit-*`
-  headers, so there's nothing to poll for a live "remaining quota." The
-  most reliable way to see real call volume is the debug logging above:
-  every fetch logs a `fetching forecast for (...)` line, so counting
-  those over a day gives you an actual number, movement-triggered extras
-  included.
-- **Tracked mode**: movement-triggered refreshes (when the tracked entity
-  crosses `min_distance_meters`) are floored by `update_interval_minutes`
-  just like the periodic timer, so a continuously-moving point (e.g.
-  driving) can't push the fetch rate past roughly double the periodic
-  baseline. It's still a cheap floor rather than a smart one — see Known
-  limitations for the "wait until actually stopped moving" idea that
-  would avoid fetching mid-transit entirely.
+  headers, so there's nothing to poll for a live "remaining quota."
+  **`sensor.<name>_api_calls_today`** counts every fetch attempt (success
+  or failure) since local midnight, per watched point — the real-time way
+  to watch this without grepping logs. The debug logging above still
+  works too, and gives more detail (which fetch, for which coordinates,
+  at what time) if you need to dig into a specific call.
+- **Tracked mode**: movement-triggered refreshes are floored by
+  `update_interval_minutes` just like the periodic timer, so a
+  continuously-moving point (e.g. driving) can't push the fetch rate past
+  roughly double the periodic baseline. On top of that,
+  `movement_settle_seconds` delays the actual fetch until movement has
+  stopped for a bit, so a long drive doesn't rack up movement-triggered
+  fetches every time it crosses `min_distance_meters` — see [Movement
+  settle debounce](#movement-settle-debounce--why-it-exists) above.
 
 None of this matters much for a handful of watched points at default
 settings; it starts to matter with many watched points, an aggressively
@@ -361,27 +388,8 @@ add this one fresh and re-create your watched points.
 
 ## Known limitations / roadmap
 
-- **No `WeatherEntity` for tracked points.** A moving point can't yet power
-  the standard HA weather forecast card the way HA core's built-in
-  Open-Meteo integration does for a fixed zone — that would need real,
-  separate work (temperature/wind/condition-code data, WMO condition-code
-  mapping, daily/hourly `Forecast` arrays). For a normal *fixed*-location
-  weather card, use HA core's built-in Open-Meteo integration directly —
-  no custom component needed for that case.
-- **`binary_sensor` availability** doesn't yet distinguish "never fetched"
-  vs. "fetch failed" vs. "fetched but no rain" beyond `None`/`False`.
 - **No reconfigure flow** for switching an existing entry between
   fixed/tracked mode — remove and re-add for now.
-- **Movement-triggered refreshes only have a cheap time floor, not a smart
-  one.** They're capped at `update_interval_minutes` (same as the
-  periodic timer, see [API usage & rate limits](#api-usage--rate-limits)),
-  which bounds worst-case API usage, but a continuously-moving point still
-  fetches on that same cadence throughout the whole trip — once per
-  `update_interval_minutes`, for a route that might not need updates at
-  all until it actually arrives somewhere. A "wait until movement has
-  settled" debounce (only fetch once the point has been roughly
-  stationary for a bit, resetting while still moving) would skip
-  in-transit fetches entirely and is a likely next addition.
 - If the live API's response shape ever changes from what's assumed here
   (verified against a real call as of this writing — see `_parse` in
   `api.py`), please [open an issue](https://github.com/mkappsch/ha-precipitation-watch/issues).

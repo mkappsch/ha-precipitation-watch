@@ -14,8 +14,9 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant, callback, Event, EventStateChangedData
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import async_call_later, async_track_state_change_event
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .api import ApiError, ForecastResult, OpenMeteoClient
 from .const import (
@@ -24,11 +25,13 @@ from .const import (
     CONF_MAX_ELEVATION_DIFF_M,
     CONF_MIN_DISTANCE_M,
     CONF_MODE,
+    CONF_MOVEMENT_SETTLE_SECONDS,
     CONF_SAMPLE_RADIUS_KM,
     CONF_TRACKED_ENTITY_ID,
     CONF_UPDATE_INTERVAL_MIN,
     DEFAULT_MAX_ELEVATION_DIFF_M,
     DEFAULT_MIN_DISTANCE_M,
+    DEFAULT_MOVEMENT_SETTLE_SECONDS,
     DEFAULT_SAMPLE_RADIUS_KM,
     DEFAULT_UPDATE_INTERVAL_MIN,
     DOMAIN,
@@ -64,6 +67,9 @@ class PrecipitationCoordinator(DataUpdateCoordinator[ForecastResult]):
         self._last_fetch_coords: tuple[float, float] | None = None
         self._last_fetch_time: datetime | None = None
         self._unsub_state_listener = None
+        self._settle_unsub = None
+        self._api_calls_today = 0
+        self._api_calls_reset_date = dt_util.now().date()
 
         interval_min = entry.options.get(CONF_UPDATE_INTERVAL_MIN, DEFAULT_UPDATE_INTERVAL_MIN)
 
@@ -87,20 +93,43 @@ class PrecipitationCoordinator(DataUpdateCoordinator[ForecastResult]):
         if self._unsub_state_listener is not None:
             self._unsub_state_listener()
             self._unsub_state_listener = None
+        if self._settle_unsub is not None:
+            self._settle_unsub()
+            self._settle_unsub = None
+
+    @property
+    def api_calls_today(self) -> int:
+        """Fetch attempts made since local midnight, success or failure --
+        the real signal for watching Open-Meteo's free-tier daily quota,
+        since a failed attempt still counts as a call made."""
+        return self._api_calls_today
+
+    def _record_api_call(self) -> None:
+        today = dt_util.now().date()
+        if today != self._api_calls_reset_date:
+            self._api_calls_today = 0
+            self._api_calls_reset_date = today
+        self._api_calls_today += 1
 
     @callback
     def _handle_tracked_entity_change(self, event: Event[EventStateChangedData]) -> None:
         """React to the tracked entity moving.
 
-        Requests a refresh only if it clears both the distance throttle and
-        a time floor matching update_interval. The time floor matters
+        Three gates, in order: the distance throttle, a time floor matching
+        update_interval, then a "settle" debounce. The time floor matters
         because async_request_refresh() does *not* respect update_interval
         on its own -- only Home Assistant's own ~10s internal refresh
         debounce would otherwise limit how often this fires, so a point
         that's continuously moving (e.g. driving) could cross
         min_distance_meters every few seconds and trigger far more fetches
-        than the periodic baseline. Flooring by update_interval caps
-        movement-triggered fetches at roughly double that baseline instead.
+        than the periodic baseline. Once both gates clear, movement_settle_seconds
+        delays the actual fetch, resetting on every further qualifying move --
+        so a point that's still actively moving doesn't fetch mid-transit,
+        only once it's actually stopped somewhere. This doesn't reduce the
+        floor's rate-limit guarantee, and doesn't starve updates during a
+        long continuous drive either: the periodic timer keeps fetching on
+        its own schedule the entire time, regardless of whether movement
+        ever "settles".
         """
         new_state = event.data["new_state"]
         if new_state is None:
@@ -140,7 +169,27 @@ class PrecipitationCoordinator(DataUpdateCoordinator[ForecastResult]):
                 )
                 return
 
-        self.hass.async_create_task(self.async_request_refresh())
+        if self._settle_unsub is not None:
+            self._settle_unsub()
+            self._settle_unsub = None
+
+        settle_seconds = self.entry.options.get(CONF_MOVEMENT_SETTLE_SECONDS, DEFAULT_MOVEMENT_SETTLE_SECONDS)
+        if settle_seconds <= 0:
+            self.hass.async_create_task(self.async_request_refresh())
+            return
+
+        _LOGGER.debug(
+            "%s: movement qualifies, waiting up to %ds for it to settle before fetching",
+            self._tracked_entity_id,
+            settle_seconds,
+        )
+
+        @callback
+        def _settled(_now) -> None:
+            self._settle_unsub = None
+            self.hass.async_create_task(self.async_request_refresh())
+
+        self._settle_unsub = async_call_later(self.hass, settle_seconds, _settled)
 
     def _extract_coords_from_state(self, state) -> tuple[float, float]:
         lat = state.attributes.get(CONF_LATITUDE)
@@ -168,6 +217,7 @@ class PrecipitationCoordinator(DataUpdateCoordinator[ForecastResult]):
             raise UpdateFailed(str(err)) from err
 
         _LOGGER.debug("%s: fetching forecast for (%.5f, %.5f)", self.name, lat, lon)
+        self._record_api_call()
         sample_radius_km = self.entry.options.get(CONF_SAMPLE_RADIUS_KM, DEFAULT_SAMPLE_RADIUS_KM)
         max_elevation_diff_m = self.entry.options.get(CONF_MAX_ELEVATION_DIFF_M, DEFAULT_MAX_ELEVATION_DIFF_M)
         try:

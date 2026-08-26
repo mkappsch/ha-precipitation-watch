@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 
-from homeassistant.components.sensor import SensorEntity, SensorDeviceClass
+from homeassistant.components.sensor import SensorEntity, SensorDeviceClass, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
@@ -52,6 +52,7 @@ async def async_setup_entry(
 
     entities.append(NextPrecipitationTimeSensor(coordinator, entry))
     entities.append(CurrentPrecipitationSensor(coordinator, entry))
+    entities.append(ApiCallsTodaySensor(coordinator, entry))
 
     async_add_entities(entities)
 
@@ -205,3 +206,38 @@ class CurrentPrecipitationSensor(_BaseSensor):
             attrs["rain_mm"] = self.coordinator.data.current_rain_mm
             attrs["showers_mm"] = self.coordinator.data.current_showers_mm
         return attrs
+
+
+class ApiCallsTodaySensor(CoordinatorEntity[PrecipitationCoordinator], SensorEntity):
+    """Open-Meteo fetch attempts for this watched point since local midnight.
+
+    Doesn't extend _BaseSensor -- the lat/lon/fetched_at/sample_points
+    attributes there are about the forecast data, not this counter, which
+    tracks API usage regardless of whether coordinator.data exists at all.
+    See "API usage & rate limits" in the README for why this exists: with
+    the default sample_radius_km sampling ring and no rate-limit headers on
+    Open-Meteo's free/keyless tier, this is the only real-time way to watch
+    against the 10,000/day quota without grepping debug logs by hand.
+    """
+
+    _attr_attribution = ATTRIBUTION
+    _attr_has_entity_name = True
+    _attr_translation_key = "api_calls_today"
+    _attr_icon = "mdi:api"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_native_unit_of_measurement = "calls"
+
+    def __init__(self, coordinator: PrecipitationCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._entry = entry
+        self._attr_unique_id = f"{entry.entry_id}_api_calls_today"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.entry_id)},
+            name=entry.data[CONF_NAME],
+            manufacturer="Open-Meteo (MeteoSwiss ICON model)",
+        )
+
+    @property
+    def native_value(self) -> int:
+        return self.coordinator.api_calls_today
