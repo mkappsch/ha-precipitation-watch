@@ -38,6 +38,7 @@ Reach for this integration instead when you need:
 | | HA core's built-in `open_meteo` | This integration |
 |---|---|---|
 | Fixed-point weather (current + forecast) | ✓ | ✓ (identical data) |
+| Daily/current condition icon reflects the whole period, not just its worst moment | No — raw Open-Meteo "most severe hour of the day" code, which can misrepresent a mostly-clear day as rainy/cloudy off a single hour | ✓ — see [how the icon is calculated](#how-the-weather-entitys-conditionicon-is-calculated) |
 | **Follows a moving entity** (`device_tracker`, `person`) | Not possible — fixed zone only | ✓ core feature |
 | Configurable precipitation alert (`binary_sensor`, threshold + lookahead) | Build it yourself from the weather entity | ✓ out of the box |
 | "Is it raining right now" nowcast sensor, distinct from the hourly forecast | No | ✓ |
@@ -46,9 +47,10 @@ Reach for this integration instead when you need:
 | Nearby-point sampling + elevation filtering (catches localized cells, avoids mountain-elevation contamination) | No | ✓ |
 | Install | Built-in | HACS custom repository |
 
-If you only ever want a weather card for one fixed spot, HA core's own
-integration is simpler and needs nothing extra installed. This project
-exists for everything a fixed zone can't do.
+If you only ever want the simplest possible setup for one fixed spot,
+HA core's own integration needs nothing extra installed. This project
+exists for everything a fixed zone can't do, plus a less misleading
+icon even for a spot that never moves.
 
 **Tuned for Switzerland and the Alps, works worldwide.** Open-Meteo's
 `best_match` uses MeteoSwiss's high-resolution regional model

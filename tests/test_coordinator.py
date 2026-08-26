@@ -293,10 +293,14 @@ async def test_weather_entity_reports_current_conditions_and_forecasts(
         blocking=True, return_response=True,
     )
     twice_daily = twice_daily_response["weather.car"]["forecast"]
-    # sample_payload's conftest fixture marks every hour is_day=True, so this
-    # collapses to a single day block (no night block to split into) -- the
-    # day/night split logic itself is covered thoroughly in test_weather.py's
-    # unit tests; this just confirms the platform wires it up without error.
-    assert len(twice_daily) == 1
-    assert twice_daily[0]["is_daytime"] is True
+    # sample_payload's conftest fixture marks every hour is_day=True (no
+    # night hours at all), so this produces one all-day block per calendar
+    # date the 24h window touches -- 1 or 2 depending on whether "now" (real
+    # wall-clock time when the test runs) happens to be near UTC midnight,
+    # since a 24h window almost always spans two calendar dates. The
+    # day/night split and picking logic itself is covered thoroughly in
+    # test_weather.py's unit tests (with fixed, not wall-clock-dependent,
+    # timestamps); this just confirms the platform wires it up without error.
+    assert len(twice_daily) >= 1
+    assert all(entry["is_daytime"] is True for entry in twice_daily)
     assert twice_daily[0]["condition"] == "sunny"  # 1 of 24 hours rainy -- below the escalation threshold
